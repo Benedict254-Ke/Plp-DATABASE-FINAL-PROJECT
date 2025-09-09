@@ -1,0 +1,88 @@
+-- ===================================================================== -- Library Management System (MySQL 8+) -- Full schema + views + triggers + stored procedures + sample seed data -- File: library_db_full.sql -- =====================================================================
+
+DROP DATABASE IF EXISTS library_db; CREATE DATABASE library_db CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci; USE library_db;
+
+-- ===================================================================== -- Lookup tables -- ===================================================================== CREATE TABLE reservation_statuses ( status_id      TINYINT PRIMARY KEY, status_name    VARCHAR(20) NOT NULL UNIQUE ) ENGINE=InnoDB;
+
+INSERT INTO reservation_statuses (status_id, status_name) VALUES (1,'ACTIVE'), (2,'CANCELLED'), (3,'FULFILLED');
+
+CREATE TABLE copy_statuses ( status_id      TINYINT PRIMARY KEY, status_name    VARCHAR(20) NOT NULL UNIQUE ) ENGINE=InnoDB;
+
+INSERT INTO copy_statuses (status_id, status_name) VALUES (1,'AVAILABLE'), (2,'ON_LOAN'), (3,'RESERVED'), (4,'LOST'), (5,'DAMAGED');
+
+-- ===================================================================== -- Core entities -- ===================================================================== CREATE TABLE branches ( branch_id      INT PRIMARY KEY AUTO_INCREMENT, name           VARCHAR(120) NOT NULL UNIQUE, address_line1  VARCHAR(200) NOT NULL, address_line2  VARCHAR(200), city           VARCHAR(100) NOT NULL, postcode       VARCHAR(20), phone          VARCHAR(30), created_at     TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ) ENGINE=InnoDB;
+
+CREATE TABLE librarians ( librarian_id   INT PRIMARY KEY AUTO_INCREMENT, branch_id      INT NOT NULL, full_name      VARCHAR(120) NOT NULL, email          VARCHAR(150) NOT NULL UNIQUE, phone          VARCHAR(30), hired_at       DATE NOT NULL, active         BOOLEAN NOT NULL DEFAULT TRUE, CONSTRAINT fk_librarian_branch FOREIGN KEY (branch_id) REFERENCES branches(branch_id) ON UPDATE CASCADE ON DELETE RESTRICT ) ENGINE=InnoDB;
+
+CREATE TABLE members ( member_id      INT PRIMARY KEY AUTO_INCREMENT, branch_id      INT NOT NULL, first_name     VARCHAR(80) NOT NULL, last_name      VARCHAR(80) NOT NULL, email          VARCHAR(150) NOT NULL UNIQUE, phone          VARCHAR(30), joined_at      DATE NOT NULL, status         ENUM('ACTIVE','SUSPENDED','INACTIVE') NOT NULL DEFAULT 'ACTIVE', CONSTRAINT fk_member_branch FOREIGN KEY (branch_id) REFERENCES branches(branch_id) ON UPDATE CASCADE ON DELETE RESTRICT ) ENGINE=InnoDB;
+
+CREATE TABLE member_cards ( member_id      INT PRIMARY KEY, card_number    VARCHAR(40) NOT NULL UNIQUE, issued_at      DATE NOT NULL, expires_at     DATE NOT NULL, CONSTRAINT fk_member_cards_member FOREIGN KEY (member_id) REFERENCES members(member_id) ON UPDATE CASCADE ON DELETE CASCADE, CONSTRAINT chk_card_dates CHECK (expires_at > issued_at) ) ENGINE=InnoDB;
+
+CREATE TABLE publishers ( publisher_id   INT PRIMARY KEY AUTO_INCREMENT, name           VARCHAR(160) NOT NULL UNIQUE, city           VARCHAR(100), country        VARCHAR(100) ) ENGINE=InnoDB;
+
+CREATE TABLE authors ( author_id      INT PRIMARY KEY AUTO_INCREMENT, first_name     VARCHAR(80), last_name      VARCHAR(80) NOT NULL, CONSTRAINT uq_author_name UNIQUE (first_name, last_name) ) ENGINE=InnoDB;
+
+CREATE TABLE genres ( genre_id       INT PRIMARY KEY AUTO_INCREMENT, name           VARCHAR(60) NOT NULL UNIQUE ) ENGINE=InnoDB;
+
+CREATE TABLE books ( book_id        INT PRIMARY KEY AUTO_INCREMENT, isbn_13        CHAR(13) NOT NULL UNIQUE, title          VARCHAR(250) NOT NULL, publisher_id   INT, publication_year SMALLINT, edition        VARCHAR(40), language       VARCHAR(40), total_pages    INT, CONSTRAINT fk_book_publisher FOREIGN KEY (publisher_id) REFERENCES publishers(publisher_id) ON UPDATE CASCADE ON DELETE SET NULL, CONSTRAINT chk_pub_year CHECK (publication_year IS NULL OR publication_year BETWEEN 1400 AND YEAR(CURDATE())), CONSTRAINT chk_pages CHECK (total_pages IS NULL OR total_pages > 0) ) ENGINE=InnoDB;
+
+CREATE TABLE book_authors ( book_id        INT NOT NULL, author_id      INT NOT NULL, author_order   SMALLINT NOT NULL DEFAULT 1, PRIMARY KEY (book_id, author_id), CONSTRAINT fk_ba_book FOREIGN KEY (book_id) REFERENCES books(book_id) ON UPDATE CASCADE ON DELETE CASCADE, CONSTRAINT fk_ba_author FOREIGN KEY (author_id) REFERENCES authors(author_id) ON UPDATE CASCADE ON DELETE RESTRICT, CONSTRAINT chk_author_order CHECK (author_order > 0) ) ENGINE=InnoDB;
+
+CREATE TABLE book_genres ( book_id        INT NOT NULL, genre_id       INT NOT NULL, PRIMARY KEY (book_id, genre_id), CONSTRAINT fk_bg_book FOREIGN KEY (book_id) REFERENCES books(book_id) ON UPDATE CASCADE ON DELETE CASCADE, CONSTRAINT fk_bg_genre FOREIGN KEY (genre_id) REFERENCES genres(genre_id) ON UPDATE CASCADE ON DELETE RESTRICT ) ENGINE=InnoDB;
+
+CREATE TABLE book_copies ( copy_id        BIGINT PRIMARY KEY AUTO_INCREMENT, book_id        INT NOT NULL, branch_id      INT NOT NULL, barcode        VARCHAR(60) NOT NULL UNIQUE, acquisition_date DATE NOT NULL, condition_note VARCHAR(200), status_id      TINYINT NOT NULL DEFAULT 1, CONSTRAINT fk_copy_book FOREIGN KEY (book_id) REFERENCES books(book_id) ON UPDATE CASCADE ON DELETE RESTRICT, CONSTRAINT fk_copy_branch FOREIGN KEY (branch_id) REFERENCES branches(branch_id) ON UPDATE CASCADE ON DELETE RESTRICT, CONSTRAINT fk_copy_status FOREIGN KEY (status_id) REFERENCES copy_statuses(status_id) ON UPDATE CASCADE ON DELETE RESTRICT ) ENGINE=InnoDB;
+
+CREATE TABLE loans ( loan_id        BIGINT PRIMARY KEY AUTO_INCREMENT, copy_id        BIGINT NOT NULL, member_id      INT NOT NULL, loaned_by      INT NOT NULL, checkout_date  DATE NOT NULL, due_date       DATE NOT NULL, returned_date  DATE, received_by    INT, fine_amount    DECIMAL(10,2) NOT NULL DEFAULT 0.00, CONSTRAINT fk_loans_copy FOREIGN KEY (copy_id) REFERENCES book_copies(copy_id) ON UPDATE CASCADE ON DELETE RESTRICT, CONSTRAINT fk_loans_member FOREIGN KEY (member_id) REFERENCES members(member_id) ON UPDATE CASCADE ON DELETE RESTRICT, CONSTRAINT fk_loans_loaned_by FOREIGN KEY (loaned_by) REFERENCES librarians(librarian_id) ON UPDATE CASCADE ON DELETE RESTRICT, CONSTRAINT fk_loans_received_by FOREIGN KEY (received_by) REFERENCES librarians(librarian_id) ON UPDATE CASCADE ON DELETE SET NULL, CONSTRAINT chk_loan_dates CHECK (due_date > checkout_date), CONSTRAINT chk_return_date CHECK (returned_date IS NULL OR returned_date >= checkout_date), CONSTRAINT chk_fine_nonneg CHECK (fine_amount >= 0) ) ENGINE=InnoDB;
+
+CREATE TABLE reservations ( reservation_id BIGINT PRIMARY KEY AUTO_INCREMENT, member_id      INT NOT NULL, book_id        INT NOT NULL, reserved_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, status_id      TINYINT NOT NULL DEFAULT 1, notes          VARCHAR(200), CONSTRAINT fk_res_member FOREIGN KEY (member_id) REFERENCES members(member_id) ON UPDATE CASCADE ON DELETE CASCADE, CONSTRAINT fk_res_book FOREIGN KEY (book_id) REFERENCES books(book_id) ON UPDATE CASCADE ON DELETE CASCADE, CONSTRAINT fk_res_status FOREIGN KEY (status_id) REFERENCES reservation_statuses(status_id) ON UPDATE CASCADE ON DELETE RESTRICT ) ENGINE=InnoDB;
+
+CREATE TABLE payments ( payment_id     BIGINT PRIMARY KEY AUTO_INCREMENT, member_id      INT NOT NULL, loan_id        BIGINT, amount         DECIMAL(10,2) NOT NULL, paid_at        DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, method         ENUM('CASH','CARD','MOBILE','OTHER') NOT NULL DEFAULT 'CASH', reference      VARCHAR(80), CONSTRAINT fk_pay_member FOREIGN KEY (member_id) REFERENCES members(member_id) ON UPDATE CASCADE ON DELETE RESTRICT, CONSTRAINT fk_pay_loan FOREIGN KEY (loan_id) REFERENCES loans(loan_id) ON UPDATE CASCADE ON DELETE SET NULL, CONSTRAINT chk_payment_amount CHECK (amount > 0) ) ENGINE=InnoDB;
+
+-- ===================================================================== -- Indexes -- ===================================================================== CREATE INDEX idx_members_branch ON members(branch_id); CREATE INDEX idx_librarians_branch ON librarians(branch_id); CREATE INDEX idx_books_publisher ON books(publisher_id); CREATE INDEX idx_book_copies_book ON book_copies(book_id); CREATE INDEX idx_book_copies_branch ON book_copies(branch_id); CREATE INDEX idx_loans_member ON loans(member_id); CREATE INDEX idx_loans_copy ON loans(copy_id); CREATE INDEX idx_reservations_member ON reservations(member_id); CREATE INDEX idx_reservations_book ON reservations(book_id);
+
+-- ===================================================================== -- Views -- ===================================================================== CREATE OR REPLACE VIEW v_current_loans AS SELECT l.loan_id, l.copy_id, bc.barcode, l.member_id, m.first_name, m.last_name, l.checkout_date, l.due_date, l.returned_date, l.fine_amount, GREATEST(DATEDIFF(CURDATE(), l.due_date), 0) AS overdue_days FROM loans l JOIN book_copies bc ON l.copy_id = bc.copy_id JOIN members m ON l.member_id = m.member_id WHERE l.returned_date IS NULL;
+
+CREATE OR REPLACE VIEW v_available_copies AS SELECT bc.copy_id, bc.book_id, b.title, bc.barcode, bc.branch_id, cstatus.status_name FROM book_copies bc JOIN books b ON bc.book_id = b.book_id JOIN copy_statuses cstatus ON bc.status_id = cstatus.status_id WHERE bc.status_id = 1; -- AVAILABLE
+
+CREATE OR REPLACE VIEW v_member_fines AS SELECT m.member_id, m.first_name, m.last_name, SUM(l.fine_amount) AS total_fines FROM members m LEFT JOIN loans l ON m.member_id = l.member_id GROUP BY m.member_id;
+
+-- ===================================================================== -- Triggers (ensure status updates and basic rules) -- ===================================================================== DELIMITER $$ CREATE TRIGGER trg_before_loan_insert BEFORE INSERT ON loans FOR EACH ROW BEGIN DECLARE cur_status TINYINT; -- ensure copy exists and is AVAILABLE SELECT status_id INTO cur_status FROM book_copies WHERE copy_id = NEW.copy_id FOR UPDATE; IF cur_status IS NULL THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Copy not found'; END IF; IF cur_status != 1 THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Copy is not available for checkout'; END IF; -- basic date checks IF NEW.due_date <= NEW.checkout_date THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'due_date must be after checkout_date'; END IF; END$$
+
+CREATE TRIGGER trg_after_loan_insert AFTER INSERT ON loans FOR EACH ROW BEGIN -- set copy status to ON_LOAN UPDATE book_copies SET status_id = 2 WHERE copy_id = NEW.copy_id; END$$
+
+CREATE TRIGGER trg_after_loan_update AFTER UPDATE ON loans FOR EACH ROW BEGIN -- when a returned_date is set (loan closed), set copy to AVAILABLE and optionally compute fine IF OLD.returned_date IS NULL AND NEW.returned_date IS NOT NULL THEN UPDATE book_copies SET status_id = 1 WHERE copy_id = NEW.copy_id; -- calculate fine if returned late (this is a simple calc; business rules may vary) IF NEW.returned_date > NEW.due_date THEN UPDATE loans SET fine_amount = GREATEST(DATEDIFF(NEW.returned_date, NEW.due_date) * 0.50, 0) WHERE loan_id = NEW.loan_id; END IF; END IF; END$$ DELIMITER ;
+
+-- ===================================================================== -- Stored Procedures: checkout, return, reserve -- ===================================================================== DELIMITER $$ -- sp_checkout(barcode, member_id, librarian_id, OUT new_loan_id) CREATE PROCEDURE sp_checkout( IN p_barcode VARCHAR(60), IN p_member_id INT, IN p_librarian_id INT, IN p_due_date DATE, OUT p_loan_id BIGINT) BEGIN DECLARE v_copy_id BIGINT; DECLARE v_status TINYINT; -- find copy SELECT copy_id, status_id INTO v_copy_id, v_status FROM book_copies WHERE barcode = p_barcode FOR UPDATE; IF v_copy_id IS NULL THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Copy barcode not found'; END IF; IF v_status != 1 THEN -- not AVAILABLE SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Copy not available for checkout'; END IF; -- create loan INSERT INTO loans (copy_id, member_id, loaned_by, checkout_date, due_date) VALUES (v_copy_id, p_member_id, p_librarian_id, CURDATE(), p_due_date); SET p_loan_id = LAST_INSERT_ID(); -- update copy status UPDATE book_copies SET status_id = 2 WHERE copy_id = v_copy_id; END$$
+
+-- sp_return(barcode, returned_date, received_by, OUT returned_loan_id) CREATE PROCEDURE sp_return( IN p_barcode VARCHAR(60), IN p_returned_date DATE, IN p_received_by INT, OUT p_returned_loan_id BIGINT) BEGIN DECLARE v_copy_id BIGINT; DECLARE v_loan_id BIGINT; DECLARE v_due DATE; -- find copy SELECT copy_id INTO v_copy_id FROM book_copies WHERE barcode = p_barcode FOR UPDATE; IF v_copy_id IS NULL THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Copy barcode not found'; END IF; -- find active loan SELECT loan_id, due_date INTO v_loan_id, v_due FROM loans WHERE copy_id = v_copy_id AND returned_date IS NULL FOR UPDATE LIMIT 1; IF v_loan_id IS NULL THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'No active loan for this copy'; END IF; -- update loan UPDATE loans SET returned_date = p_returned_date, received_by = p_received_by, fine_amount = CASE WHEN p_returned_date > v_due THEN GREATEST(DATEDIFF(p_returned_date, v_due) * 0.50, 0) ELSE 0 END WHERE loan_id = v_loan_id; SET p_returned_loan_id = v_loan_id; -- update copy status UPDATE book_copies SET status_id = 1 WHERE copy_id = v_copy_id; END$$
+
+-- sp_reserve(member_id, book_id) CREATE PROCEDURE sp_reserve( IN p_member_id INT, IN p_book_id INT, OUT p_reservation_id BIGINT) BEGIN -- prevent duplicate active reservation for same member+book IF EXISTS (SELECT 1 FROM reservations WHERE member_id = p_member_id AND book_id = p_book_id AND status_id = 1) THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Active reservation already exists for this member and book'; END IF; INSERT INTO reservations (member_id, book_id) VALUES (p_member_id, p_book_id); SET p_reservation_id = LAST_INSERT_ID(); END$$ DELIMITER ;
+
+-- ===================================================================== -- Sample seed data (small) - comment out if not needed -- ===================================================================== INSERT INTO branches(name, address_line1, city, postcode, phone) VALUES ('Main Library','1 Library Rd','Nairobi','00100','+254700000001'), ('East Branch','45 East St','Nairobi','00200','+254700000002');
+
+INSERT INTO librarians(branch_id, full_name, email, hired_at) VALUES (1,'Alice Librarian','alice@example.org','2021-01-10'), (2,'Bob Librarian','bob@example.org','2022-05-15');
+
+INSERT INTO members(branch_id, first_name, last_name, email, joined_at) VALUES (1,'John','Reader','john.reader@example.org','2024-06-01'), (2,'Jane','Borrower','jane.borrower@example.org','2024-07-10');
+
+INSERT INTO member_cards(member_id, card_number, issued_at, expires_at) VALUES (1,'CARD-0001','2024-06-01','2027-06-01'), (2,'CARD-0002','2024-07-10','2027-07-10');
+
+INSERT INTO publishers(name, city, country) VALUES ('Open Books Press','Nairobi','Kenya');
+
+INSERT INTO authors(first_name,last_name) VALUES ('Jane','Austen'),('Mark','Twain');
+
+INSERT INTO genres(name) VALUES ('Fiction'),('Classic');
+
+INSERT INTO books(isbn_13,title,publisher_id,publication_year,total_pages) VALUES ('9781234567897','Pride & Reading',1,2020,320), ('9789876543210','River Tales',1,2018,250);
+
+INSERT INTO book_authors(book_id,author_id,author_order) VALUES (1,1,1),(2,2,1); INSERT INTO book_genres(book_id,genre_id) VALUES (1,1),(1,2),(2,1);
+
+INSERT INTO book_copies(book_id, branch_id, barcode, acquisition_date) VALUES (1,1,'BC0001','2024-06-15'),(1,1,'BC0002','2024-06-16'),(2,2,'BC1001','2024-07-01');
+
+-- Create an active loan for BC0002 INSERT INTO loans(copy_id, member_id, loaned_by, checkout_date, due_date) VALUES (2,1,1,DATE_SUB(CURDATE(), INTERVAL 10 DAY), DATE_ADD(DATE_SUB(CURDATE(), INTERVAL 10 DAY), INTERVAL 14 DAY));
+
+-- Update copy statuses accordingly (BC0002 should be ON_LOAN) UPDATE book_copies SET status_id = 2 WHERE barcode = 'BC0002';
+
+-- ===================================================================== -- Quick usage examples (SQL client): -- 1) Checkout a copy using stored procedure: --    CALL sp_checkout('BC0001', 1, 1, DATE_ADD(CURDATE(), INTERVAL 14 DAY), @loan_id); SELECT @loan_id; -- 2) Return a copy: --    CALL sp_return('BC0002', CURDATE(), 2, @returned_loan); SELECT @returned_loan; -- 3) Reserve a book: --    CALL sp_reserve(2, 1, @res_id); SELECT @res_id; -- 4) See available copies: --    SELECT * FROM v_available_copies; -- 5) See current loans: --    SELECT * FROM v_current_loans;
+
+-- ===================================================================== -- End of file -- =====================================================================
+
